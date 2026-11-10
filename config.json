@@ -1,10 +1,10 @@
 {
   "brand_name": "TheDrunkBots",
   "admin_password": "admin123",
-  "mongo_uri": "mongodb+srv://shauryasharma9940_db_user:hi1OxTU3GdXFtRLf@g2sv2.fnvvosz.mongodb.net/?appName=G2SV2",
-  "telegram_bot_token": "8958607022:AAHvO7wuHe3K-vFdZY_AN2nH6DXiSgiY-FE",
-  "telegram_api_id": 25396020,
-  "telegram_api_hash": "228ea638bed51dd4ae3cc9e4e51e198c",
+  "mongo_uri": "mongodb+srv://aryansharma89891_db_user:xowD7Bbzb2n066y3@cluster0.fses58d.mongodb.net",
+  "telegram_bot_token": "9156574956:AAEezy2bAjqyhRbw4OnNEnBMtTGsrgHYS7Q",
+  "telegram_api_id": 32375440,
+  "telegram_api_hash": "6f3e3be972baf0b53dbeacedf1a50e19",
   "owner_id": 8584220782,
   "admin_ids": [
     8584220782
@@ -22,7 +22,7 @@
   ],
   "maintenance_mode": false,
   "protect_content": false,
-  "solver_url": "https://cf.vltcx.eu.cc",
+  "solver_url": "https://turnstile-solver-fixed-production-283c.up.railway.app",
   "solver_api_key": null,
   "browser_channel": null,
   "headless": false,
