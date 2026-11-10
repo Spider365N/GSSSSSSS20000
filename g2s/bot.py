@@ -471,6 +471,7 @@ class TelegramBot:
             {"command": "bypass", "description": "⚡ Bypass a shortlink"},
             {"command": "myinfo", "description": "👤 View your stats & profile"},
             {"command": "status", "description": "📊 Check bot & cloud cache status"},
+            {"command": "loop", "description": "🔁 Open Loop Mode setup panel (Premium)"},
             {"command": "loop_setup", "description": "🔁 Setup Loop Mode (Premium) — continuous multi-link processing"},
             {"command": "loop_start", "description": "▶️ Start Loop Mode (Premium)"},
             {"command": "loop_stop", "description": "⏹ Stop running Loop Mode"},
@@ -479,9 +480,16 @@ class TelegramBot:
         # Register globally so every user sees the full command list (including loop_*)
         res = await self.api("setMyCommands", {"commands": user_cmds})
         if res and res.get("ok"):
-            print(f"✔ Bot commands registered ({len(user_cmds)} cmds, incl. loop_setup/start/stop/status)", flush=True)
+            print(f"✔ Bot commands registered ({len(user_cmds)} cmds, incl. loop/loop_setup/start/stop/status)", flush=True)
         else:
             print(f"⚠ setMyCommands failed: {(res or {}).get('description')}", flush=True)
+            # Retry once after short delay (Telegram sometimes flakes on boot)
+            await asyncio.sleep(2.0)
+            res2 = await self.api("setMyCommands", {"commands": user_cmds})
+            if res2 and res2.get("ok"):
+                print("✔ Bot commands registered on retry", flush=True)
+            else:
+                print(f"⚠ setMyCommands retry failed: {(res2 or {}).get('description')}", flush=True)
         # Also clear any chat-specific overrides so the global list is what users see
         with contextlib.suppress(Exception):
             await self.api("deleteMyCommands", {"scope": {"type": "all_private_chats"}})
@@ -1174,17 +1182,49 @@ class TelegramBot:
             if cmd == "/myinfo":
                 await self._cmd_myinfo(chat_id, user_doc, msg_id)
                 return
-            if cmd in ("/loop_setup", "/loopsetup", "/setup_loop"):
-                await self._cmd_loop_setup(chat_id, user_id, from_user, msg_id)
+            if cmd in ("/loop_setup", "/loopsetup", "/setup_loop", "/loop"):
+                try:
+                    await self._cmd_loop_setup(chat_id, user_id, from_user, msg_id)
+                except Exception as e:
+                    print(f"loop_setup error uid={user_id}: {e}", flush=True)
+                    await self.send_message(
+                        chat_id,
+                        f"⚠ Loop setup error: <code>{html.escape(str(e)[:180])}</code>",
+                        reply_to=msg_id,
+                    )
                 return
             if cmd in ("/loop_start", "/loopstart", "/start_loop"):
-                await self._cmd_loop_start(chat_id, user_id, from_user, msg_id)
+                try:
+                    await self._cmd_loop_start(chat_id, user_id, from_user, msg_id)
+                except Exception as e:
+                    print(f"loop_start error uid={user_id}: {e}", flush=True)
+                    await self.send_message(
+                        chat_id,
+                        f"⚠ Loop start error: <code>{html.escape(str(e)[:180])}</code>",
+                        reply_to=msg_id,
+                    )
                 return
             if cmd in ("/loop_stop", "/loopstop", "/stop_loop"):
-                await self._cmd_loop_stop(chat_id, user_id, msg_id)
+                try:
+                    await self._cmd_loop_stop(chat_id, user_id, msg_id)
+                except Exception as e:
+                    print(f"loop_stop error uid={user_id}: {e}", flush=True)
+                    await self.send_message(
+                        chat_id,
+                        f"⚠ Loop stop error: <code>{html.escape(str(e)[:180])}</code>",
+                        reply_to=msg_id,
+                    )
                 return
             if cmd in ("/loop_status", "/loopstatus", "/status_loop"):
-                await self._cmd_loop_status(chat_id, user_id, msg_id)
+                try:
+                    await self._cmd_loop_status(chat_id, user_id, msg_id)
+                except Exception as e:
+                    print(f"loop_status error uid={user_id}: {e}", flush=True)
+                    await self.send_message(
+                        chat_id,
+                        f"⚠ Loop status error: <code>{html.escape(str(e)[:180])}</code>",
+                        reply_to=msg_id,
+                    )
                 return
             if cmd in ("/bypass", "/b", "/dl"):
                 if not arg:
@@ -1802,7 +1842,7 @@ class TelegramBot:
             ],
             [
                 {"text": "🔁 Loop Setup", "callback_data": "loop:setup", "style": "primary"},
-                {"text": "▶️ Start Loop", "callback_data": "loop:start"},
+                {"text": "▶️ Start Loop", "callback_data": "loop:start", "style": "success"},
             ],
             [
                 {"text": "⏹ Stop Loop", "callback_data": "loop:stop"},
@@ -3513,24 +3553,27 @@ class TelegramBot:
             await self._cmd_start(chat_id, user_id, from_user, None, edit_id=edit_target)
             return
 
-        if data == "loop:start":
-            await self.api("answerCallbackQuery", {"callback_query_id": cb_id})
-            await self._cmd_loop_start(chat_id, user_id, from_user, msg_id)
-            return
-
-        if data == "loop:setup":
-            await self.api("answerCallbackQuery", {"callback_query_id": cb_id})
-            await self._cmd_loop_setup(chat_id, user_id, from_user, msg_id)
-            return
-
-        if data == "loop:stop":
-            await self.api("answerCallbackQuery", {"callback_query_id": cb_id})
-            await self._cmd_loop_stop(chat_id, user_id, msg_id)
-            return
-
-        if data == "loop:status":
-            await self.api("answerCallbackQuery", {"callback_query_id": cb_id})
-            await self._cmd_loop_status(chat_id, user_id, msg_id)
+        if data in ("loop:start", "loop:setup", "loop:stop", "loop:status"):
+            try:
+                await self.api("answerCallbackQuery", {"callback_query_id": cb_id})
+            except Exception:
+                pass
+            try:
+                if data == "loop:start":
+                    await self._cmd_loop_start(chat_id, user_id, from_user, msg_id)
+                elif data == "loop:setup":
+                    await self._cmd_loop_setup(chat_id, user_id, from_user, msg_id)
+                elif data == "loop:stop":
+                    await self._cmd_loop_stop(chat_id, user_id, msg_id)
+                else:
+                    await self._cmd_loop_status(chat_id, user_id, msg_id)
+            except Exception as e:
+                print(f"loop callback {data} error uid={user_id}: {e}", flush=True)
+                await self.send_message(
+                    chat_id,
+                    f"⚠ Loop error: <code>{html.escape(str(e)[:180])}</code>",
+                    reply_to=msg_id,
+                )
             return
 
         # Admin callbacks
