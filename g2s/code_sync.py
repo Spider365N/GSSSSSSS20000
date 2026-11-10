@@ -131,33 +131,93 @@ class CodeSyncManager:
                     mongo_updated_at = float(meta.get("updated_at") or 0)
                     cur_rev = int(meta.get("revision") or 1)
                     if mongo_hash and mongo_hash != local_hash:
-                        if (
+                        doc = (
+                            await self.db.db.code_files.find_one({"_id": rel_path})
+                            or await self.db.db.code_files.find_one({"path": rel_path})
+                        )
+                        mongo_content = str((doc or {}).get("content") or "")
+
+                        # Feature markers: if the Docker/deploy image has product features
+                        # that MongoDB snapshot is missing, prefer deploy and push UP to Mongo
+                        # (prevents Anti-Rollback from wiping Loop Mode / new panels on every restart)
+                        _FEATURE_MARKERS = {
+                            "g2s/bot.py": (
+                                "loop:setup",
+                                "_cmd_loop_setup",
+                                "/loop_setup",
+                                "Loop Setup",
+                            ),
+                            "g2s/engine.py": (
+                                "browser_handoff_url",
+                                "_try_shortners_workers_direct",
+                            ),
+                            "g2s/code_sync.py": (
+                                "prefer_deploy",
+                                "G2S_PREFER_DEPLOY",
+                                "deploy_prefer",
+                                "FEATURE_MARKERS",
+                            ),
+                        }
+                        markers = _FEATURE_MARKERS.get(rel_path) or ()
+                        local_has_features = bool(markers) and any(m in local_content for m in markers)
+                        mongo_has_features = bool(markers) and any(m in mongo_content for m in markers)
+                        prefer_deploy = bool(local_has_features and not mongo_has_features)
+
+                        # Env override: G2S_PREFER_DEPLOY=1 always keeps container files
+                        if str(os.environ.get("G2S_PREFER_DEPLOY", "")).strip().lower() in (
+                            "1", "true", "yes", "on",
+                        ):
+                            prefer_deploy = True
+
+                        if prefer_deploy:
+                            # Push local deploy version INTO Mongo so next boots keep it
+                            try:
+                                await self.db.db.code_files.update_one(
+                                    {"_id": rel_path},
+                                    {"$set": {
+                                        "path": rel_path,
+                                        "content": local_content,
+                                        "sha256": local_hash,
+                                        "revision": cur_rev + 1,
+                                        "ai_modified": True,
+                                        "updated_at": time.time(),
+                                        "author": "deploy_prefer",
+                                        "last_commit_msg": "Deploy image preferred over stale Mongo snapshot (feature markers)",
+                                    }},
+                                    upsert=True,
+                                )
+                                print(
+                                    f"⬆ Boot: kept deploy {rel_path} (has newer features) and synced to MongoDB",
+                                    flush=True,
+                                )
+                                self.db.add_system_log(
+                                    f"Boot Prefer-Deploy: kept container {rel_path} and pushed to MongoDB",
+                                    level="INFO",
+                                    component="code_sync",
+                                )
+                            except Exception as e:
+                                print(f"Boot prefer-deploy push failed for {rel_path}: {e}", flush=True)
+                        elif (
                             meta.get("ai_modified")
                             or cur_rev > 1
                             or mongo_updated_at > 1792400000
-                        ):
-                            doc = (
-                                await self.db.db.code_files.find_one({"_id": rel_path})
-                                or await self.db.db.code_files.find_one({"path": rel_path})
-                            )
-                            if doc and doc.get("content"):
-                                mongo_content = str(doc["content"])
-                                ok, err = self.validate_syntax(rel_path, mongo_content)
-                                if ok:
-                                    with open(full, "w", encoding="utf-8") as f:
-                                        f.write(mongo_content)
-                                    if mongo_updated_at > 0:
-                                        try:
-                                            os.utime(full, (mongo_updated_at, mongo_updated_at))
-                                        except Exception:
-                                            pass
-                                    restored.append(rel_path)
-                                    self.db.add_system_log(
-                                        f"Boot Anti-Rollback Guard: Restored AI-updated {rel_path} "
-                                        f"(rev #{cur_rev}) from MongoDB",
-                                        level="INFO",
-                                        component="code_sync",
-                                    )
+                        ) and mongo_content:
+                            ok, err = self.validate_syntax(rel_path, mongo_content)
+                            if ok:
+                                with open(full, "w", encoding="utf-8") as f:
+                                    f.write(mongo_content)
+                                if mongo_updated_at > 0:
+                                    try:
+                                        os.utime(full, (mongo_updated_at, mongo_updated_at))
+                                    except Exception:
+                                        pass
+                                restored.append(rel_path)
+                                self.db.add_system_log(
+                                    f"Boot Anti-Rollback Guard: Restored AI-updated {rel_path} "
+                                    f"(rev #{cur_rev}) from MongoDB",
+                                    level="INFO",
+                                    component="code_sync",
+                                )
                 else:
                     # Seed initial baseline in MongoDB only when no document exists yet
                     await self.db.db.code_files.update_one(
